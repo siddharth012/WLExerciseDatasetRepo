@@ -1,0 +1,150 @@
+---
+title: "Weight Lifting Exercises Dataset"
+author: "Siddharth Agarwal"
+date: "Sunday, November 16, 2014"
+output: html_document
+---
+
+Introduction
+---
+
+This study is conducted to predict how well a person performs a health exercise. Devices such as Jawbone Up, Nike FuelBand, and FitBit collect large amount of data about personal activity of a person, which helps predict how well this activity is being performed. We analyze this data by initially cleaning it, and then applying a number of machine learning algorithms in order to create a prediction algorithm that can, once given a test data, predict whether a person is performing an activity properly or not.
+
+Firstly, let us include all the required libraries, read our training data, and assess column characteristics:
+
+```{r echo=FALSE}
+# setwd("C:/Users/Siddharth/SkyDrive/Documents/Coursera/Practical Machine Learning/Project")
+```
+```{r message=FALSE, warning=FALSE}
+library(caret)
+library(lattice)
+library(rattle)
+library(randomForest)
+library(knitr)
+```
+```{r setoptions, echo=FALSE}
+opts_chunk$set(fig.height=10, fig.width=12, width = 200, message=FALSE, warning=FALSE)
+```
+```{r}
+train <- read.csv("pml-training.csv")[,-1] #Read training data
+str(train)
+```
+
+The response variable of this data is **classe**, which determines the level of correctness by which an exercise is being performed. Other columns are predictors, which we initially need to clean in order to fit a model.
+
+Data Processing
+---
+
+The training data contains **`r nrow(train)`** rows and **`r ncol(train)`** columns. This data set contains a number of columns that are either full of NAs, or empty. Therefore, we clean this data initially by removing these specific columns. 
+
+```{r}
+train <- train[,colSums(is.na(train)) == 0]
+nzv <- nearZeroVar(train, saveMetrics = FALSE)
+train <- train[,-nzv]
+BackupTrainData <- train
+```
+
+This has reduced our data set size to **`r nrow(train)`** rows and **`r ncol(train)`** columns.
+
+From our machine learning concepts, it is always advisable to segregate our training data into two parts, namely **train** and **test** data. This **train** data will be used to create a model using one of the many prediction algorithms, and then test this model on our **test** data. The main reason for this is that we get an estimate of our accuracy, and helps in comparing a number of models for this problem statement. This technique is called **cross-validation** We partition our original data as 60-40 (60% training and 40% test data) using these codes:
+
+```{r}
+inTrain <- createDataPartition(y = BackupTrainData$classe, p = 0.6, list = FALSE) #Training 60% and test 40%
+test <- train[-inTrain,]
+train <- train[inTrain,]
+```
+
+Let us plot a few predictors based on **classe** variable to assess any possible relationship between them:
+
+```{r}
+featurePlot(x = train[,c("roll_belt", "pitch_belt", "yaw_belt")], y = train$classe, plot = "pairs")
+qplot(user_name, colour = classe, data = train) #Histogram
+```
+
+First plot shows a rough cluster formation which segregates each factor in **classe** variable. Second plot (histogram) shows that each user performs each class of activity uniformly.
+
+Now, we will create a few machine learning models using our **train** data and compare them using cross-validation technique on segregated **test** data.
+
+Model Formation
+---
+
+As this data set is relatively small, therefore the first model we fit is using **Decision Trees**:
+
+```{r cache=TRUE, cache.path='WLDataSet_cache/', fig.path='figure/'}
+modfitrpart <- train(classe ~ ., method = "rpart", data = train) #Fit the model
+fancyRpartPlot(modfitrpart$finalModel) #Print a fancy plot of this tree
+confusionMatrix(test$classe, predict(modfitrpart, newdata = test[-58])) #Confusion matrix to compare predicted vs actual test data.
+```
+
+Here we see that the accuracy is very poor. Therefore, we try another algorithm to solve this problem.
+
+Next we us **Random Forests** algorithm to fit this training data. As Random Forest creates a number of models (like bagging), this makes our data set to be relatively quite large (`r nrow(train)` rows and `r ncol(train)` columns) in this scenario, making it computationally very slow. Due to this constraint, i tried to fit this model separately, which took a couple of hours to run but resulted in almost 99% accuracy. Therefore, it can be safely said that this model fits perfectly for this data set. For computational purposes, let us partition our original data set as 10-90 and fit a Random Forest model.
+
+```{r}
+inTrain <- createDataPartition(y = BackupTrainData$classe, p = 0.1, list = FALSE) #Training 10% and test 90%
+test <- BackupTrainData[-inTrain,]
+train <- BackupTrainData[inTrain,]
+```
+
+Using randomForest package for training the model:
+
+```{r cache=TRUE, cache.path='WLDataSet_cache/', fig.path='figure/'}
+modfitrf <- randomForest(classe ~ ., data = train, ntree = 1000, keep.forest = TRUE, importance = TRUE)
+```
+
+This is a basic summary of our fitted model:
+
+```{r}
+modfitrf
+```
+
+From here, we expect the out-of-bag error to be 2.09%. Now, we validate the accuracy of our model by fitting it on test data:
+
+```{r}
+confusionMatrix(test$classe, predict(modfitrf, newdata = test[-58])) #Printing confusion matrix
+```
+
+This results in more than 98% accuracy, which is a pretty good prediction model. The actual out-of-sample error is 1.7%. From the following graph, we can extract the main contributing predictors based on their error rate and its plot:
+
+```{r}
+varImpPlot(modfitrf) #Variable Importance Plot
+```
+
+This shows that the most important predictors are **cvtd_timestamp**, **raw_timestamp_part_1**, **roll_belt**, **num_window** and **yaw_belt** with the first two being the most important, as they increase accuracy substantially.
+
+Prediction
+---
+
+Read an actual test data set for prediction using this model.
+
+```{r}
+TestSet <- read.csv("pml-testing.csv")[,-1]
+TestSet <- TestSet[,names(train)[-58]]
+rowtrain <- nrow(train)
+
+# Following code creates equal number of levels for cvtd_timestamp factor predictor in 'TestSet' data as that in 'train' data
+
+a <- as.character(c(as.character(train$cvtd_timestamp), as.character(TestSet$cvtd_timestamp)))
+a <- as.factor(a)
+TestSet$cvtd_timestamp <- a[1965:1984]
+```
+
+Predict classe variable in **TestSet** test data and store in individual files for each row:
+
+```{r}
+TestPrediction <- predict(modfitrf, newdata = TestSet)
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+pml_write_files(TestPrediction)
+```
+
+The predicted output for this data is:
+
+```{r}
+print(TestPrediction)
+```
